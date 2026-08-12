@@ -1,0 +1,119 @@
+name: Build and Deploy Container
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRY_OWNER: lucidopshq
+  PACKAGE_NAME: google-drive-mcp
+  CLUSTER_REPO: LucidOpsHQ/lucidops-cluster
+  CLUSTER_DEPLOYMENT_FILE: apps/agent-mcp/google-drive-mcp.yaml
+
+jobs:
+  build:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.PACKAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.PACKAGE_NAME }}:latest
+
+  deploy:
+    name: Update Cluster Image Tag
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push'
+    steps:
+      - name: Require cluster repo deploy key
+        env:
+          CLUSTER_REPO_DEPLOY_KEY: ${{ secrets.LUCIDOPS_CLUSTER_DEPLOY_KEY }}
+        run: |
+          test -n "$CLUSTER_REPO_DEPLOY_KEY" || {
+            echo "::error::Set LUCIDOPS_CLUSTER_DEPLOY_KEY to a write-enabled deploy key for ${CLUSTER_REPO}"
+            exit 1
+          }
+      - name: Checkout cluster repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CLUSTER_REPO }}
+          ref: main
+          ssh-key: ${{ secrets.LUCIDOPS_CLUSTER_DEPLOY_KEY }}
+          path: lucidops-cluster
+      - name: Update deployment image
+        working-directory: lucidops-cluster
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          package_name = os.environ["PACKAGE_NAME"]
+          image = f'{os.environ["REGISTRY"]}/{os.environ["REGISTRY_OWNER"]}/{package_name}:{os.environ["GITHUB_SHA"]}'
+          path = Path(os.environ["CLUSTER_DEPLOYMENT_FILE"])
+          text = path.read_text()
+          pattern = rf'(image:\s*){re.escape(os.environ["REGISTRY"])}/{re.escape(os.environ["REGISTRY_OWNER"])}/{re.escape(package_name)}:[^\s]+'
+          updated, count = re.subn(pattern, rf'\1{image}', text)
+          if count == 0:
+              raise SystemExit(f"No image reference updated for {package_name}")
+          path.write_text(updated)
+          PY
+      - name: Commit and push cluster update
+        working-directory: lucidops-cluster
+        run: |
+          git add "$CLUSTER_DEPLOYMENT_FILE"
+          git diff --cached --quiet && exit 0
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Update ${PACKAGE_NAME} image to ${GITHUB_SHA}"
+          for attempt in 1 2 3; do
+            git push && exit 0
+            git fetch origin main
+            git rebase origin/main
+          done
+          echo "::error::Could not push the cluster update after three attempts"
+          exit 1
+
+  cleanup:
+    name: Keep Current and Five Previous Versions
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push'
+    permissions:
+      packages: write
+    steps:
+      - name: Delete old package versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ env.PACKAGE_NAME }}
+          package-type: container
+          min-versions-to-keep: 6
+          delete-only-untagged-versions: false
