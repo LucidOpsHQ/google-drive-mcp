@@ -91,9 +91,9 @@ jobs:
         run: |
           git add "$CLUSTER_DEPLOYMENT_FILE"
           git diff --cached --quiet && exit 0
-          git -c user.name="github-actions[bot]" \
-            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -m "Update ${PACKAGE_NAME} image to ${GITHUB_SHA}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update ${PACKAGE_NAME} image to ${GITHUB_SHA}"
           for attempt in 1 2 3; do
             git push && exit 0
             git fetch origin main
