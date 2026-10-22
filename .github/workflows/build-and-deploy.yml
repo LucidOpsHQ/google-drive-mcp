@@ -80,7 +80,7 @@ jobs:
           image = f'{os.environ["REGISTRY"]}/{os.environ["REGISTRY_OWNER"]}/{package_name}:{os.environ["GITHUB_SHA"]}'
           path = Path(os.environ["CLUSTER_DEPLOYMENT_FILE"])
           text = path.read_text()
-          pattern = rf'(image:\s*){re.escape(os.environ["REGISTRY"])}/{re.escape(os.environ["REGISTRY_OWNER"])}/{re.escape(package_name)}:[^\s]+'
+          pattern = rf'(image:\s*)(?:{re.escape(os.environ["REGISTRY"])}/{re.escape(os.environ["REGISTRY_OWNER"])}/{re.escape(package_name)}|localhost:32000/lo360/google-drive-mcp):[^\s]+'
           updated, count = re.subn(pattern, rf'\1{image}', text)
           if count == 0:
               raise SystemExit(f"No image reference updated for {package_name}")
