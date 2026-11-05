@@ -1,0 +1,36 @@
+name: Deploy prod
+# Builds the image and tags it `prod`; Argo CD Image Updater in the LucidOps cluster
+# commits the new digest and Argo deploys it within a few minutes. Merging never deploys.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit SHA
+        required: true
+        default: master
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Build and push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=ghcr.io/lucidopshq/google-drive-mcp
+          sha="$(git rev-parse HEAD)"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build -t "$image:$sha" -t "$image:prod" .
+          docker push "$image:$sha"
+          docker push "$image:prod"
+          echo "Pushed $image:prod ($sha)" >> "$GITHUB_STEP_SUMMARY"
